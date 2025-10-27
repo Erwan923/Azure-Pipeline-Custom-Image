@@ -1,6 +1,6 @@
 <div align="center">
 
-![Logo](logo.png)
+<img src="logo.png" alt="Logo" width="200"/>
 
 ### *One Image to rule them all*
 
@@ -9,18 +9,6 @@
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
 </div>
-
----
-
-## Overview
-
-This pipeline validates custom Ubuntu build agent images for Azure DevOps Managed Pools. It ensures that your VM image has all required development tools, connectivity to enterprise services, and proper SSL configuration before developers use it.
-
-**Validation scope:**
-- Development tools installation and versions
-- SonarQube code analysis connectivity
-- Nexus Repository Manager access for npm, NuGet, and Maven
-- SSL certificate configuration
 
 ---
 
@@ -68,6 +56,18 @@ Validates Nexus Repository Manager access.
 
 **Job 4: Maven**
 - Resolves Java dependencies from Nexus Maven proxy
+
+---
+
+## Overview
+
+This pipeline validates custom Ubuntu build agent images for Azure DevOps Managed Pools. It ensures that your VM image has all required development tools, connectivity to enterprise services, and proper SSL configuration before developers use it.
+
+**Validation scope:**
+- Development tools installation and versions
+- SonarQube code analysis connectivity
+- Nexus Repository Manager access for npm, NuGet, and Maven
+- SSL certificate configuration
 
 ---
 
