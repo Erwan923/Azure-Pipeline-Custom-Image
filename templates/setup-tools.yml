@@ -1,0 +1,440 @@
+---
+# ============================================================================
+# ANSIBLE PLAYBOOK - DEVELOPMENT TOOLS SETUP & VERIFICATION
+# ============================================================================
+
+- name: Setup and Verify Development Tools
+  hosts: localhost
+  become: yes
+  gather_facts: yes
+
+  vars:
+    required_versions:
+      dotnet: "8.0.414"
+      python: "3.10.12"
+      pip: "22.0.2"
+      maven: "3.6.3"
+      docker: "28.4.0"
+      docker_compose: "v2.38.2"
+      git: "2.34.1"
+      yamllint: "1.26.3"
+      zstd: "1.4.8"
+      azure_cli: "2.77.0"
+      java: "17.0.16"
+      sonar_scanner: "7.2.0.5079"
+
+  tasks:
+    # ========================================================================
+    # SYSTEM UPDATE
+    # ========================================================================
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    # ========================================================================
+    # .NET SDK
+    # ========================================================================
+    - name: Check current .NET SDK version
+      shell: dotnet --version 2>/dev/null || echo "not_installed"
+      register: dotnet_current
+      changed_when: false
+      failed_when: false
+
+    - name: Install/Update .NET SDK
+      when: required_versions.dotnet not in dotnet_current.stdout
+      block:
+        - name: Add Microsoft repository
+          shell: |
+            wget -q https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb -O /tmp/packages-microsoft-prod.deb
+            dpkg -i /tmp/packages-microsoft-prod.deb
+            rm /tmp/packages-microsoft-prod.deb
+          args:
+            creates: /etc/apt/sources.list.d/microsoft-prod.list
+
+        - name: Install .NET SDK {{ required_versions.dotnet }}
+          apt:
+            name: dotnet-sdk-8.0
+            state: present
+            update_cache: yes
+
+    # ========================================================================
+    # PYTHON & PIP
+    # ========================================================================
+    - name: Check current Python version
+      shell: python3 --version 2>&1 | awk '{print $2}' || echo "not_installed"
+      register: python_current
+      changed_when: false
+      failed_when: false
+
+    - name: Install Python
+      when: python_current.stdout == "not_installed" or python_current.stdout is version(required_versions.python, '<')
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+        state: present
+
+    - name: Check current pip version
+      shell: pip3 --version 2>&1 | awk '{print $2}' || echo "not_installed"
+      register: pip_current
+      changed_when: false
+      failed_when: false
+
+    - name: Upgrade pip if needed
+      when: pip_current.stdout == "not_installed" or pip_current.stdout is version(required_versions.pip, '<')
+      pip:
+        name: pip
+        state: latest
+        executable: pip3
+
+    # ========================================================================
+    # MAVEN
+    # ========================================================================
+    - name: Check current Maven version
+      shell: mvn --version 2>/dev/null | head -1 | awk '{print $3}' || echo "not_installed"
+      register: maven_current
+      changed_when: false
+      failed_when: false
+
+    - name: Install Maven {{ required_versions.maven }}
+      when: maven_current.stdout == "not_installed" or maven_current.stdout is version(required_versions.maven, '<')
+      apt:
+        name: maven
+        state: present
+
+    # ========================================================================
+    # DOCKER
+    # ========================================================================
+    - name: Check current Docker version
+      shell: docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || echo "not_installed"
+      register: docker_current
+      changed_when: false
+      failed_when: false
+
+    - name: Install Docker
+      when: docker_current.stdout == "not_installed"
+      block:
+        - name: Install Docker prerequisites
+          apt:
+            name:
+              - ca-certificates
+              - curl
+              - gnupg
+              - apt-transport-https
+            state: present
+
+        - name: Add Docker GPG key
+          apt_key:
+            url: https://download.docker.com/linux/ubuntu/gpg
+            state: present
+
+        - name: Add Docker repository
+          apt_repository:
+            repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+            state: present
+            filename: docker
+
+        - name: Install Docker packages
+          apt:
+            name:
+              - docker-ce
+              - docker-ce-cli
+              - containerd.io
+              - docker-compose-plugin
+            state: present
+            update_cache: yes
+
+    # ========================================================================
+    # DOCKER COMPOSE
+    # ========================================================================
+    - name: Check current Docker Compose version
+      shell: docker compose version 2>/dev/null | awk '{print $4}' || echo "not_installed"
+      register: compose_current
+      changed_when: false
+      failed_when: false
+
+    - name: Docker Compose status
+      debug:
+        msg: "Docker Compose {{ compose_current.stdout }} (required: {{ required_versions.docker_compose }})"
+
+    # ========================================================================
+    # GIT
+    # ========================================================================
+    - name: Check current Git version
+      shell: git --version 2>/dev/null | awk '{print $3}' || echo "not_installed"
+      register: git_current
+      changed_when: false
+      failed_when: false
+
+    - name: Install Git
+      when: git_current.stdout == "not_installed"
+      apt:
+        name: git
+        state: present
+
+    # ========================================================================
+    # YAMLLINT
+    # ========================================================================
+    - name: Check current yamllint version
+      shell: yamllint --version 2>/dev/null | awk '{print $2}' || echo "not_installed"
+      register: yamllint_current
+      changed_when: false
+      failed_when: false
+
+    - name: Install yamllint
+      when: yamllint_current.stdout == "not_installed"
+      apt:
+        name: yamllint
+        state: present
+
+    # ========================================================================
+    # ZSTD
+    # ========================================================================
+    - name: Check current zstd version
+      shell: zstd --version 2>/dev/null | head -1 | grep -oP 'v\K[0-9.]+' || echo "not_installed"
+      register: zstd_current
+      changed_when: false
+      failed_when: false
+
+    - name: Install zstd
+      when: zstd_current.stdout == "not_installed"
+      apt:
+        name: zstd
+        state: present
+
+    # ========================================================================
+    # AZURE CLI
+    # ========================================================================
+    - name: Check current Azure CLI version
+      shell: az version --query '"azure-cli"' -o tsv 2>/dev/null || echo "not_installed"
+      register: az_current
+      changed_when: false
+      failed_when: false
+
+    - name: Install Azure CLI
+      when: az_current.stdout == "not_installed"
+      block:
+        - name: Add Azure CLI repository
+          shell: |
+            curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+          args:
+            creates: /usr/bin/az
+
+    # ========================================================================
+    # JAVA JDK
+    # ========================================================================
+    - name: Check current Java version
+      shell: java -version 2>&1 | head -1 | awk -F'"' '{print $2}' || echo "not_installed"
+      register: java_current
+      changed_when: false
+      failed_when: false
+
+    - name: Install Java {{ required_versions.java }}
+      when: java_current.stdout == "not_installed" or not java_current.stdout.startswith('17.')
+      apt:
+        name: openjdk-17-jdk
+        state: present
+
+    - name: Ensure JAVA_HOME is set
+      lineinfile:
+        path: /etc/environment
+        regexp: '^JAVA_HOME='
+        line: 'JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64'
+        create: yes
+
+    # ========================================================================
+    # .NET ENVIRONMENT VARIABLES
+    # ========================================================================
+    - name: Configure .NET environment variables
+      lineinfile:
+        path: /etc/environment
+        regexp: "^{{ item.key }}="
+        line: "{{ item.key }}={{ item.value }}"
+        create: yes
+      loop:
+        - { key: 'DOTNET_CLI_TELEMETRY_OPTOUT', value: '1' }
+        - { key: 'DOTNET_NOLOGO', value: 'true' }
+        - { key: 'DOTNET_SKIP_FIRST_TIME_EXPERIENCE', value: 'true' }
+
+    # ========================================================================
+    # SONARQUBE SCANNER
+    # ========================================================================
+    - name: Check current SonarQube Scanner version
+      shell: sonar-scanner --version 2>/dev/null | grep 'SonarScanner' | awk '{print $3}' || echo "not_installed"
+      register: sonar_current
+      changed_when: false
+      failed_when: false
+
+    - name: Install SonarQube Scanner {{ required_versions.sonar_scanner }}
+      when: sonar_current.stdout == "not_installed" or sonar_current.stdout != required_versions.sonar_scanner
+      block:
+        - name: Remove old SonarQube Scanner
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /usr/local/bin/sonar-scanner
+            - /opt/sonar-scanner-*
+
+        - name: Download SonarQube Scanner
+          get_url:
+            url: "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-{{ required_versions.sonar_scanner }}-linux-x64.zip"
+            dest: /tmp/sonar-scanner.zip
+            timeout: 30
+
+        - name: Install unzip
+          apt:
+            name: unzip
+            state: present
+
+        - name: Extract SonarQube Scanner
+          unarchive:
+            src: /tmp/sonar-scanner.zip
+            dest: /opt
+            remote_src: yes
+
+        - name: Create sonar-scanner symlink
+          file:
+            src: "/opt/sonar-scanner-{{ required_versions.sonar_scanner }}-linux-x64/bin/sonar-scanner"
+            dest: /usr/local/bin/sonar-scanner
+            state: link
+
+        - name: Cleanup
+          file:
+            path: /tmp/sonar-scanner.zip
+            state: absent
+
+    # ========================================================================
+    # VERIFICATION FINALE AVEC COMPARAISON DE VERSIONS
+    # ========================================================================
+    - name: Verify all tools with version comparison
+      shell: |
+        echo "🔍 =========================================="
+        echo "   TOOLS VERIFICATION REPORT"
+        echo "============================================"
+        echo ""
+
+        check_version() {
+          TOOL=$1
+          CURRENT=$2
+          REQUIRED=$3
+
+          if [ "$CURRENT" = "not_installed" ] || [ -z "$CURRENT" ]; then
+            echo "❌ $TOOL: NOT INSTALLED (required: $REQUIRED)"
+            return 1
+          elif [ "$CURRENT" = "$REQUIRED" ]; then
+            echo "✅ $TOOL: $CURRENT (exact match)"
+            return 0
+          else
+            echo "⚠️  $TOOL: $CURRENT (required: $REQUIRED)"
+            return 0
+          fi
+        }
+
+        # .NET SDK
+        DOTNET_VER=$(dotnet --version 2>/dev/null || echo "not_installed")
+        check_version ".NET SDK         " "$DOTNET_VER" "{{ required_versions.dotnet }}"
+
+        # Python
+        PYTHON_VER=$(python3 --version 2>&1 | awk '{print $2}' || echo "not_installed")
+        check_version "Python           " "$PYTHON_VER" "{{ required_versions.python }}"
+
+        # pip
+        PIP_VER=$(pip3 --version 2>&1 | awk '{print $2}' || echo "not_installed")
+        check_version "pip              " "$PIP_VER" "{{ required_versions.pip }}"
+
+        # Maven
+        MVN_VER=$(mvn --version 2>/dev/null | head -1 | awk '{print $3}' || echo "not_installed")
+        check_version "Maven            " "$MVN_VER" "{{ required_versions.maven }}"
+
+        # Docker
+        DOCKER_VER=$(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || echo "not_installed")
+        check_version "Docker           " "$DOCKER_VER" "{{ required_versions.docker }}"
+
+        # Docker Compose
+        COMPOSE_VER=$(docker compose version 2>/dev/null | awk '{print $4}' || echo "not_installed")
+        check_version "Docker Compose   " "$COMPOSE_VER" "{{ required_versions.docker_compose}}"
+
+        # Git
+        GIT_VER=$(git --version 2>/dev/null | awk '{print $3}' || echo "not_installed")
+        check_version "Git              " "$GIT_VER" "{{ required_versions.git }}"
+
+        # yamllint
+        YAML_VER=$(yamllint --version 2>/dev/null | awk '{print $2}' || echo "not_installed")
+        check_version "yamllint         " "$YAML_VER" "{{ required_versions.yamllint }}"
+
+        # zstd
+        ZSTD_VER=$(zstd --version 2>/dev/null | head -1 | grep -oP 'v\K[0-9.]+' || echo "not_installed")
+        check_version "zstd             " "$ZSTD_VER" "{{ required_versions.zstd }}"
+
+        # Azure CLI
+        AZ_VER=$(az version --query '"azure-cli"' -o tsv 2>/dev/null || echo "not_installed")
+        check_version "Azure CLI        " "$AZ_VER" "{{ required_versions.azure_cli }}"
+
+        # Java
+        JAVA_VER=$(java -version 2>&1 | head -1 | awk -F'"' '{print $2}' || echo "not_installed")
+        check_version "Java             " "$JAVA_VER" "{{ required_versions.java }}"
+
+        # SonarQube Scanner
+        SONAR_VER=$(sonar-scanner --version 2>/dev/null | grep 'SonarScanner' | awk '{print $3}' || echo "not_installed")
+        check_version "SonarQube Scanner" "$SONAR_VER" "{{ required_versions.sonar_scanner }}"
+
+        # Environment variables
+        echo ""
+        echo "🔐 Environment Variables:"
+
+        # JAVA_HOME
+        if [ -n "$JAVA_HOME" ]; then
+          echo "✅ JAVA_HOME: $JAVA_HOME"
+        elif grep -q "JAVA_HOME=" /etc/environment 2>/dev/null; then
+          JAVA_HOME_VAL=$(grep "JAVA_HOME=" /etc/environment | cut -d'=' -f2)
+          echo "✅ JAVA_HOME: $JAVA_HOME_VAL (in /etc/environment)"
+        else
+          echo "❌ JAVA_HOME: NOT SET"
+        fi
+
+        # NODE_EXTRA_CA_CERTS
+        if [ -n "$NODE_EXTRA_CA_CERTS" ]; then
+          echo "✅ NODE_EXTRA_CA_CERTS: $NODE_EXTRA_CA_CERTS"
+        elif grep -q "NODE_EXTRA_CA_CERTS=" /etc/environment 2>/dev/null; then
+          CA_VAL=$(grep "NODE_EXTRA_CA_CERTS=" /etc/environment | cut -d'=' -f2)
+          echo "✅ NODE_EXTRA_CA_CERTS: $CA_VAL (in /etc/environment)"
+        else
+          echo "⚠️ NODE_EXTRA_CA_CERTS: NOT SET"
+        fi
+
+        # .NET Configuration
+        echo ""
+        echo "⚙️  .NET Configuration:"
+
+        if grep -q "DOTNET_CLI_TELEMETRY_OPTOUT=" /etc/environment 2>/dev/null; then
+          TELEMETRY=$(grep "DOTNET_CLI_TELEMETRY_OPTOUT=" /etc/environment | cut -d'=' -f2)
+          echo "✅ DOTNET_CLI_TELEMETRY_OPTOUT: $TELEMETRY"
+        else
+          echo "⚠️ DOTNET_CLI_TELEMETRY_OPTOUT: NOT SET"
+        fi
+
+        if grep -q "DOTNET_NOLOGO=" /etc/environment 2>/dev/null; then
+          NOLOGO=$(grep "DOTNET_NOLOGO=" /etc/environment | cut -d'=' -f2)
+          echo "✅ DOTNET_NOLOGO: $NOLOGO"
+        else
+          echo "⚠️ DOTNET_NOLOGO: NOT SET"
+        fi
+
+        if grep -q "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=" /etc/environment 2>/dev/null; then
+          SKIP_FTE=$(grep "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=" /etc/environment | cut -d'=' -f2)
+          echo "✅ DOTNET_SKIP_FIRST_TIME_EXPERIENCE: $SKIP_FTE"
+        else
+          echo "⚠️ DOTNET_SKIP_FIRST_TIME_EXPERIENCE: NOT SET"
+        fi
+
+        echo ""
+        echo "============================================"
+      register: final_verification
+      changed_when: false
+
+    - name: Display final report
+      debug:
+        msg: "{{ final_verification.stdout_lines }}"

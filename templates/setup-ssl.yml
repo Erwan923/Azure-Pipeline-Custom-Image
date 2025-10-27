@@ -1,0 +1,119 @@
+# templates/setup-ssl.yml
+# Template mode enable/disable install cert
+
+parameters:
+  - name: enable
+    type: boolean
+    default: true
+  - name: testUrl
+    type: string
+    default: ''
+
+steps:
+# ============================================================================
+# IF ENABLE = TRUE : Install Certificate
+# ============================================================================
+- ${{ if eq(parameters.enable, true) }}:
+
+  - task: DownloadSecureFile@1
+    name: DownloadTruststore
+    displayName: "📥 Download truststore"
+    inputs:
+      secureFile: 'truststore.p12'
+
+  - script: |
+      set -e
+      STORE_DIR=/usr/local/share/store
+      CERTS_DIR=/usr/local/share/ca-certificates
+      sudo mkdir -p "$STORE_DIR" "$CERTS_DIR"
+      sudo cp "$(DownloadTruststore.secureFilePath)" "$STORE_DIR/truststore.p12"
+      sudo chmod 644 "$STORE_DIR/truststore.p12"
+
+      if sudo openssl pkcs12 -in "$STORE_DIR/truststore.p12" \
+        -passin pass:changeit -nokeys -out "$STORE_DIR/all-certs.pem" 2>/dev/null; then
+        echo "✅ Extracted with password"
+      else
+        sudo openssl pkcs12 -in "$STORE_DIR/truststore.p12" \
+          -passin pass: -nokeys -out "$STORE_DIR/all-certs.pem" 2>/dev/null
+        echo "✅ Extracted without password"
+      fi
+
+      sudo cp "$STORE_DIR/all-certs.pem" "$CERTS_DIR/company-all-certs.crt"
+      sudo chmod 644 "$STORE_DIR/all-certs.pem"
+      sudo chmod 644 "$CERTS_DIR/company-all-certs.crt"
+      sudo update-ca-certificates
+
+      export NODE_EXTRA_CA_CERTS=/usr/local/share/store/all-certs.pem
+      echo "##vso[task.setvariable variable=NODE_EXTRA_CA_CERTS]$NODE_EXTRA_CA_CERTS"
+    displayName: "🔐 Setup SSL certificates"
+
+  - ${{ if ne(parameters.testUrl, '') }}:
+    - script: |
+        curl -sS --cacert /usr/local/share/store/all-certs.pem "${{ parameters.testUrl }}"
+      displayName: "🌐 Test SSL connection"
+      continueOnError: true
+
+# ============================================================================
+# IF ENABLE = FALSE : Verify certificate in the VM
+# ============================================================================
+- ${{ if eq(parameters.enable, false) }}:
+
+  - script: |
+      set -e
+      echo "🔍 SSL setup disabled - verifying certificates exist in image..."
+      echo ""
+
+      # Verification
+      if [ -d "/usr/local/share/ca-certificates" ]; then
+        echo "✅ Certificate directory exists: /usr/local/share/ca-certificates/"
+        echo ""
+        echo "📋 Found certificates:"
+        ls -lh /usr/local/share/ca-certificates/
+        echo ""
+
+        # Count
+        CERT_COUNT=$(find /usr/local/share/ca-certificates -name "*.crt" -o -name "*company.com" | wc -l)
+        echo "📊 Total certificate files found: $CERT_COUNT"
+
+        if [ $CERT_COUNT -gt 0 ]; then
+          echo "✅ Certificates are present in the image"
+        else
+          echo "⚠️ No certificate files found"
+        fi
+      else
+        echo "❌ Certificate directory does NOT exist!"
+        exit 1
+      fi
+
+
+      if [ -f "/etc/ssl/certs/ca-certificates.crt" ]; then
+        echo ""
+        echo "✅ System CA bundle exists: /etc/ssl/certs/ca-certificates.crt"
+        ls -lh /etc/ssl/certs/ca-certificates.crt
+
+        # ✅ IMPORTANT: Point to the bundle for Node.js/Java
+        echo "##vso[task.setvariable variable=NODE_EXTRA_CA_CERTS]/etc/ssl/certs/ca-certificates.crt"
+        echo "Set NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt"
+      else
+        echo "❌ System CA bundle NOT found!"
+        exit 1
+      fi
+    displayName: "✅ Verify Certificates in Image"
+
+  - ${{ if ne(parameters.testUrl, '') }}:
+    - script: |
+        echo "🧪 Testing SSL connection to: ${{ parameters.testUrl }}"
+        echo ""
+
+        # Test avec le bundle système
+        echo "Testing with system CA bundle..."
+        if curl -sS --max-time 10 --cacert /etc/ssl/certs/ca-certificates.crt "${{ parameters.testUrl }}" > /dev/null 2>&1; then
+          echo "✅ SSL connection successful"
+        else
+          echo "❌ SSL connection failed"
+          echo ""
+          echo "Debug info:"
+          curl -v --max-time 10 --cacert /etc/ssl/certs/ca-certificates.crt "${{ parameters.testUrl }}" 2>&1 | head -20
+          exit 1
+        fi
+      displayName: "🌐 Test SSL Connection"

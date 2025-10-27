@@ -1,0 +1,336 @@
+# ============================================================================
+# GENERIC SERVICE VALIDATION PIPELINE
+# ============================================================================
+# Purpose: Validate integration with SonarQube and Nexus repositories
+# Maintainer: DevOps Team
+# Last Updated: 2025-10-20
+# ============================================================================
+
+trigger:
+  batch: false
+  branches:
+    include:
+      - main
+  paths:
+    exclude:
+      - README.md
+      - docs/**
+      - '*.md'
+
+pr: none
+
+# ============================================================================
+# BUILD AGENT CONFIGURATION
+# ============================================================================
+pool:
+  name: your-build-agent-pool
+  demands:
+    - ImageOverride -equals ubuntu-custom
+
+# ============================================================================
+# PIPELINE VARIABLES
+# ============================================================================
+variables:
+  # Service URLs
+  - name: SONARQUBE_URL
+    value: https://sonarqube.example.com
+  - name: NEXUS_URL
+    value: https://nexus.example.com
+  - name: NODE_VERSION
+    value: 22.20.0
+  - name: SONARQUBE_TOKEN
+    value: $(SONARQUBE_TOKEN_SECRET)  # Use Azure DevOps secret variable
+  
+  # .NET Configuration
+  - name: DOTNET_CLI_TELEMETRY_OPTOUT
+    value: '1'
+  - name: DOTNET_NOLOGO
+    value: 'true'
+  - name: DOTNET_SKIP_FIRST_TIME_EXPERIENCE
+    value: 'true'
+
+# ============================================================================
+# STAGE 0: ENVIRONMENT SETUP
+# ============================================================================
+stages:
+- stage: Environment_Setup
+  displayName: "🛠️ Environment Setup"
+  jobs:
+  - job: Setup_Tools
+    displayName: "Setup Development Tools"
+    steps:
+    # Load environment variables
+    - script: |
+        set -a
+        source /etc/environment 2>/dev/null || true
+        set +a
+        
+        if [ -n "$NODE_EXTRA_CA_CERTS" ]; then
+          echo "##vso[task.setvariable variable=NODE_EXTRA_CA_CERTS;isOutput=true]$NODE_EXTRA_CA_CERTS"
+          echo "✅ NODE_EXTRA_CA_CERTS loaded: $NODE_EXTRA_CA_CERTS"
+        else
+          echo "⚠️ NODE_EXTRA_CA_CERTS not found in /etc/environment"
+        fi
+        
+        if [ -n "$SONAR_SCANNER_OPTS" ]; then
+          echo "##vso[task.setvariable variable=SONAR_SCANNER_OPTS;isOutput=true]$SONAR_SCANNER_OPTS"
+          echo "✅ SONAR_SCANNER_OPTS loaded: $SONAR_SCANNER_OPTS"
+        else
+          echo "⚠️ SONAR_SCANNER_OPTS not found in /etc/environment"
+        fi
+      name: envVars
+      displayName: "Load Environment Variables"
+
+    # Install Ansible if needed
+    - script: |
+        if ! command -v ansible-playbook &> /dev/null; then
+          echo "📥 Installing Ansible..."
+          sudo apt-get update -qq
+          sudo apt-get install -y ansible
+        else
+          echo "✅ Ansible already installed"
+        fi
+      displayName: "Ensure Ansible is Installed"
+
+    # Run Ansible playbook (handles everything)
+    - script: |
+        ansible-playbook templates/setup-tools.yml \
+          --connection=local \
+          --inventory=localhost, \
+          --extra-vars "ansible_python_interpreter=/usr/bin/python3"
+      displayName: "Run Ansible Setup & Verification"
+      env:
+        ANSIBLE_FORCE_COLOR: 'true'
+
+# ============================================================================
+# STAGE 1: SONARQUBE CODE QUALITY VALIDATION
+# ============================================================================
+- stage: SonarQube_Validation
+  displayName: "🔍 Code Quality Analysis"
+  dependsOn: Environment_Setup
+  jobs:
+
+  # --------------------------------------------------------------------------
+  # Job 1.1: SonarQube using Azure DevOps Native Tasks
+  # --------------------------------------------------------------------------
+  - job: SonarQube_Tasks
+    displayName: "SonarQube - Azure DevOps Tasks"
+    steps:
+    # Load environment
+    - script: |
+        set -a
+        source /etc/environment 2>/dev/null || true
+        set +a
+        
+        [ -n "$NODE_EXTRA_CA_CERTS" ] && echo "##vso[task.setvariable variable=NODE_EXTRA_CA_CERTS]$NODE_EXTRA_CA_CERTS"
+        [ -n "$SONAR_SCANNER_OPTS" ] && echo "##vso[task.setvariable variable=SONAR_SCANNER_OPTS]$SONAR_SCANNER_OPTS"
+      displayName: "Load Environment"
+
+    # Prepare SonarQube
+    - task: SonarQubePrepare@7
+      displayName: "Prepare SonarQube Analysis"
+      inputs:
+        SonarQube: 'sonarqube-service-connection'
+        scannerMode: 'dotnet'
+        projectKey: 'org:project:dotnet-sample'
+        projectName: 'dotnet-sample'
+      continueOnError: true
+
+    # Build .NET project
+    - script: |
+        dotnet new console -o DotnetSample --force
+        cd DotnetSample && dotnet build
+        dotnet test --no-build || echo "⚠️ No tests found"
+      displayName: "Build & Test .NET Project"
+      continueOnError: true
+      condition: succeededOrFailed()
+
+    # Analyze
+    - task: SonarQubeAnalyze@7
+      displayName: "Run Code Analysis"
+      inputs:
+        jdkversion: 'JAVA_HOME_17_X64'
+      continueOnError: true
+      condition: succeededOrFailed()
+
+    # Publish
+    - task: SonarQubePublish@7
+      displayName: "Publish Results"
+      inputs:
+        pollingTimeoutSec: '300'
+      continueOnError: true
+      condition: succeededOrFailed()
+
+  # --------------------------------------------------------------------------
+  # Job 1.2: SonarQube CLI Scanner
+  # --------------------------------------------------------------------------
+  - job: SonarQube_CLI
+    displayName: "SonarQube - CLI Scanner"
+    steps:
+    # Load environment
+    - script: |
+        set -a
+        source /etc/environment 2>/dev/null || true
+        set +a
+      displayName: "Load Environment"
+    
+    # Run CLI Analysis
+    - script: |
+        dotnet tool install --global dotnet-sonarscanner || true
+        export PATH="$PATH:$HOME/.dotnet/tools"
+        
+        dotnet new console -o DotnetSample --force && cd DotnetSample
+        
+        dotnet sonarscanner begin \
+          /k:"org:project:dotnet-sample" \
+          /n:"dotnet-sample" \
+          /d:sonar.host.url="$(SONARQUBE_URL)" \
+          /d:sonar.token="$(SONARQUBE_TOKEN)"
+        
+        dotnet build
+        dotnet test --no-build || true
+        dotnet sonarscanner end /d:sonar.token="$(SONARQUBE_TOKEN)"
+      displayName: "Run CLI Analysis"
+      continueOnError: true
+
+# ============================================================================
+# STAGE 2: NEXUS PACKAGE REPOSITORY VALIDATION
+# ============================================================================
+- stage: Nexus_Validation
+  displayName: "🧩 Package Repository Connectivity"
+  dependsOn: Environment_Setup
+  jobs:
+
+  # --------------------------------------------------------------------------
+  # Job 2.1: npm - lodash
+  # --------------------------------------------------------------------------
+  - job: npm_lodash
+    displayName: "npm - lodash"
+    steps:
+    - script: |
+        set -e
+        NODE_VERSION="$(NODE_VERSION)"
+        NEXUS_NODE_URL="$(NEXUS_URL)/repository/npm-proxy/dist/v${NODE_VERSION}"
+        
+        curl -fsSL "${NEXUS_NODE_URL}/node-v${NODE_VERSION}-linux-x64.tar.gz" -o node.tar.gz
+        tar -xzf node.tar.gz
+        echo "##vso[task.prependpath]$(pwd)/node-v${NODE_VERSION}-linux-x64/bin"
+        rm node.tar.gz
+      displayName: "Install Node.js from Nexus"
+
+    - script: |
+        set -e
+        TEST_DIR="$(Agent.TempDirectory)/npm-test"
+        mkdir -p "$TEST_DIR" && cd "$TEST_DIR"
+        
+        cat > .npmrc << 'EOF'
+        registry=https://nexus.example.com/repository/npm-hosted/
+        cafile=/etc/ssl/certs/ca-certificates.crt
+        strict-ssl=true
+        audit=false
+        EOF
+      displayName: "Configure npm"
+
+    - task: npmAuthenticate@0
+      inputs:
+        workingFile: '$(Agent.TempDirectory)/npm-test/.npmrc'
+        customEndpoint: 'Nexus-npm-connection'
+
+    - script: |
+        cd "$(Agent.TempDirectory)/npm-test"
+        npm init -y
+        npm install lodash
+        node -e "const _ = require('lodash'); console.log('✅ lodash', _.VERSION, 'installed')"
+        cd .. && rm -rf npm-test
+      displayName: "Test lodash"
+      continueOnError: true
+
+  # --------------------------------------------------------------------------
+  # Job 2.2: NuGet Pull
+  # --------------------------------------------------------------------------
+  - job: NuGet_Pull
+    displayName: "NuGet - Pull Test (Newtonsoft.Json)"
+    steps:
+    - task: NuGetAuthenticate@1
+      inputs:
+        nuGetServiceConnections: 'Nexus-NuGet-connection'
+
+    - script: |
+        set -e
+        
+        TEST_DIR="$(Agent.TempDirectory)/nuget-test"
+        mkdir -p "$TEST_DIR" && cd "$TEST_DIR"
+        
+        dotnet new classlib --force
+        dotnet add package Newtonsoft.Json --version 13.0.3 \
+          --source https://nexus.example.com/repository/nuget-hosted/
+        
+        dotnet list package | grep -q "Newtonsoft.Json.*13.0.3"
+        echo "✅ Newtonsoft.Json installed"
+        
+        cd .. && rm -rf nuget-test
+      displayName: "Test NuGet Pull"
+
+  # --------------------------------------------------------------------------
+  # Job 2.3: NuGet Push
+  # --------------------------------------------------------------------------
+  - job: NuGet_Push
+    displayName: "NuGet - Push Test (DotNetCoreCLI)"
+    steps:
+    
+    # Create test package
+    - script: |
+        set -e
+        TEST_DIR="$(Agent.TempDirectory)/nuget-push-test"
+        mkdir -p "$TEST_DIR" && cd "$TEST_DIR"
+        
+        dotnet new classlib -n TestPackage.$(Build.BuildId) --force
+        cd TestPackage.$(Build.BuildId)
+        
+        dotnet pack -c Release \
+          -p:Version=1.0.$(Build.BuildId) \
+          -o $(Agent.TempDirectory)/nuget-push-output
+        
+        echo "✅ Package created: TestPackage.$(Build.BuildId).1.0.$(Build.BuildId).nupkg"
+      displayName: "Create Test Package"
+    
+    # Push to Nexus hosted repository
+    - task: DotNetCoreCLI@2
+      displayName: "Push to Nexus Hosted Repo"
+      inputs:
+        command: 'push'
+        packagesToPush: '$(Agent.TempDirectory)/nuget-push-output/*.nupkg'
+        nuGetFeedType: 'external'
+        externalEndpoint: 'Nexus-NuGet-Push-connection'
+      continueOnError: true
+
+  # --------------------------------------------------------------------------
+  # Job 2.4: Maven
+  # --------------------------------------------------------------------------
+  - job: Maven
+    displayName: "Maven - Dependency Test"
+    steps:
+    - script: |
+        set -e
+        TEST_DIR="$(Agent.TempDirectory)/maven-test"
+        mkdir -p "$TEST_DIR" && cd "$TEST_DIR"
+        
+        mvn archetype:generate \
+          -DgroupId=com.example.test \
+          -DartifactId=maven-test \
+          -DarchetypeArtifactId=maven-archetype-quickstart \
+          -DarchetypeVersion=1.4 \
+          -DinteractiveMode=false
+        
+        cd maven-test
+        mvn dependency:resolve
+        mvn clean compile
+        
+        cd ../.. && rm -rf maven-test
+        echo "✅ Maven test completed"
+      displayName: "Test Maven"
+      continueOnError: true
+
+# ============================================================================
+# END OF PIPELINE
+# ============================================================================
