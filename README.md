@@ -12,6 +12,18 @@
 
 ---
 
+## Architecture Overview
+
+<div align="center">
+
+![Azure DevOps Architecture](Azure_Pipeline.png)
+
+*Custom Ubuntu image validation pipeline for Azure DevOps Managed Pools*
+
+</div>
+
+---
+
 ## Pipeline Roadmap
 
 <div align="center">
@@ -74,7 +86,6 @@ This pipeline validates custom Ubuntu build agent images for Azure DevOps Manage
 ## Configuration
 
 Update `azure-pipelines.yml` with your environment:
-
 ```yaml
 pool:
   name: your-build-agent-pool
@@ -116,12 +127,12 @@ variables:
 ---
 
 ## Project Structure
-
 ```
 .
 ├── azure-pipelines.yml          # Main pipeline definition
 ├── logo.png                     # Project logo
-├── photo.png                    # Architecture diagram
+├── Azure_Pipeline.png           # Architecture diagram
+├── photo.png                    # Pipeline roadmap
 ├── README.md                    # Documentation
 └── templates/
     ├── setup-ssl.yml            # SSL certificate management
