@@ -10,19 +10,6 @@
 
 </div>
 
----
-
-## Architecture Overview
-
-<div align="center">
-
-![Azure DevOps Architecture](Azure_Pipeline.png)
-
-*Custom Ubuntu image validation pipeline for Azure DevOps Managed Pools*
-
-</div>
-
----
 
 ## Pipeline Roadmap
 
@@ -71,15 +58,15 @@ Validates Nexus Repository Manager access.
 
 ---
 
-## Overview
+## Architecture Overview
 
-This pipeline validates custom Ubuntu build agent images for Azure DevOps Managed Pools. It ensures that your VM image has all required development tools, connectivity to enterprise services, and proper SSL configuration before developers use it.
+<div align="center">
 
-**Validation scope:**
-- Development tools installation and versions
-- SonarQube code analysis connectivity
-- Nexus Repository Manager access for npm, NuGet, and Maven
-- SSL certificate configuration
+![Azure DevOps Architecture](Azure_Pipeline.png)
+
+*Custom Ubuntu image validation pipeline for Azure DevOps Managed Pools*
+
+</div>
 
 ---
 
